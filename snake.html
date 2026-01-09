@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Serpent's Ascent: Deluxe</title>
+    <style>
+        :root {
+            --bg-color: #2c3e50;
+            --accent: #f39c12;
+            --text: #ecf0f1;
+        }
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            box-sizing: border-box;
+        }
+        h1 { 
+            margin-bottom: 15px; 
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5); 
+            font-size: 2.5rem;
+            color: var(--accent);
+        }
+        
+        /* --- Game Container & Sidebar --- */
+        .main-container {
+            display: flex;
+            gap: 25px;
+            align-items: flex-start;
+            filter: blur(5px); /* Blurred until game starts */
+            transition: filter 0.5s;
+        }
+        .main-container.active { filter: none; }
+
+        canvas {
+            background: linear-gradient(135deg, #ffffff 0%, #bdc3c7 100%);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border-radius: 12px;
+            border: 4px solid #34495e;
+        }
+        .sidebar {
+            width: 320px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .card {
+            background: rgba(0,0,0,0.4);
+            padding: 20px;
+            border-radius: 12px;
+            border-left: 6px solid var(--accent);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+        .dice-display {
+            font-size: 2.5rem;
+            text-align: center;
+            margin-top: 15px;
+            font-weight: bold;
+            color: var(--accent);
+            text-shadow: 1px 1px 2px black;
+        }
+        .btn-action {
+            background: linear-gradient(to bottom, #e74c3c, #c0392b);
+            color: white;
+            border: none;
+            padding: 18px;
+            font-size: 1.3rem;
+            cursor: pointer;
+            border-radius: 8px;
+            font-weight: bold;
+            width: 100%;
+            text-transform: uppercase;
+            box-shadow: 0 4px #9f2b1e;
+            transition: all 0.1s;
+        }
+        .btn-action:active:not(:disabled) {
+            transform: translateY(4px);
+            box-shadow: 0 0 #9f2b1e;
+        }
+        .btn-action:disabled { 
+            background: #7f8c8d; 
+            box-shadow: none;
+            cursor: not-allowed; 
+            opacity: 0.8;
+        }
+        
+        .log-box {
+            height: 280px;
+            overflow-y: auto;
+            background: rgba(0,0,0,0.5);
+            padding: 15px;
+            font-size: 0.95rem;
+            border-radius: 8px;
+            border: 1px solid #546e7a;
+        }
+        .log-entry { margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .log-highlight { color: var(--accent); font-weight: bold; }
+        .log-danger { color: #e74c3c; font-weight: bold; }
+        .log-success { color: #2ecc71; font-weight: bold; }
+        
+        /* --- Setup Modal --- */
+        #setupOverlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(44, 62, 80, 0.95);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+        }
+        .setup-box {
+            background: #34495e;
+            padding: 40px;
+            border-radius: 16px;
+            text-align: center;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+            border: 2px solid var(--accent);
+        }
+        .setup-group { margin-bottom: 20px; text-align: left; }
+        label { display: block; margin-bottom: 8px; font-weight: bold; }
+        select {
+            width: 100%; padding: 12px; border-radius: 6px; border: none;
+            font-size: 1.1rem; background: #ecf0f1; color: #2c3e50;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="setupOverlay">
+        <div class="setup-box">
+            <h2 style="color: var(--accent); margin-top: 0;">Game Setup</h2>
+            <div class="setup-group">
+                <label for="totalPlayers">Total Players (2-6):</label>
+                <select id="totalPlayers">
+                    <option value="2">2</option>
+                    <option value="3">3</option>
+                    <option value="4" selected>4</option>
+                    <option value="5">5</option>
+                    <option value="6">6</option>
+                </select>
+            </div>
+            <div class="setup-group">
+                <label for="aiPlayers">AI Opponents:</label>
+                <select id="aiPlayers">
+                    <option value="0">0 (All Human)</option>
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="3" selected>3</option>
+                    <option value="4">4</option>
+                    <option value="5">5</option>
+                </select>
+            </div>
+            <button class="btn-action" id="startBtn">Start Game 🎲</button>
+        </div>
+    </div>
+
+    <h1>Serpent's Ascent: Deluxe 🐍👑</h1>
+
+    <div class="main-container" id="mainContainer">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        
+        <div class="sidebar">
+            <div class="card">
+                <h2 id="currentPlayerText" style="margin: 0 0 10px 0; border-bottom: 2px solid rgba(255,255,255,0.2); padding-bottom: 10px;">
+                    Player 1
+                </h2>
+                <div style="display: flex; justify-content: space-between;">
+                     <span id="statusType">Status: Normal</span>
+                     <span id="statusIcon">😊</span>
+                </div>
+                <div class="dice-display" id="diceResult">READY</div>
+            </div>
+
+            <button class="btn-action" id="rollBtn" disabled>ROLL DICE</button>
+
+            <div class="log-box" id="gameLog"></div>
+        </div>
+    </div>
+
+<script>
+// ===========================
+// AUDIO SUBSYSTEM (Web Audio API)
+// ===========================
+const AudioEngine = {
+    ctx: null,
+    init: function() {
+        // Initialize on first user interaction to bypass autoplay policies
+        if (!this.ctx) {
+            this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (this.ctx.state === 'suspended') this.ctx.resume();
+    },
+    
+    // Helper to create standard beep/tone
+    playTone: function(freq, type, duration, fadeOut = true, volume = 0.2) {
+        if(!this.ctx) return;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.type = type; // 'sine', 'square', 'sawtooth', 'triangle'
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(volume, this.ctx.currentTime);
+        if(fadeOut) gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
+        osc.start();
+        osc.stop(this.ctx.currentTime + duration);
+    },
+
+    // Helper for noise (snakes/dice)
+    playNoise: function(duration, volume = 0.1) {
+        if(!this.ctx) return;
+        const bufferSize = this.ctx.sampleRate * duration;
+        const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+
+        const noise = this.ctx.createBufferSource();
+        noise.buffer = buffer;
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.frequency.value = 1000;
+        const gain = this.ctx.createGain();
+        gain.gain.setValueAtTime(volume, this.ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + duration);
+
+        noise.connect(filter).connect(gain).connect(this.ctx.destination);
+        noise.start();
+    },
+
+    // --- SFX Definitions ---
+    sfxStep: function() { this.playTone(400, 'sine', 0.08, true, 0.3); },
+    sfxDice: function() { this.playNoise(0.4, 0.25); },
+    sfxPowerup: function() { 
+        if(!this.ctx) return;
+        const now = this.ctx.currentTime;
+        this.playTone(600, 'sine', 0.5, false, 0.2);
+        // Pitch bend up
+        const osc = this.ctx.createOscillator(); osc.connect(this.ctx.destination);
+        osc.frequency.setValueAtTime(600, now);
+        osc.frequency.linearRampToValueAtTime(1200, now + 0.5);
+        osc.start(); osc.stop(now + 0.5);
+    },
+    sfxSnake: function() {
+        if(!this.ctx) return;
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator(); const gain = this.ctx.createGain();
+        osc.connect(gain).connect(this.ctx.destination);
+        osc.type = 'sawtooth';
+        gain.gain.setValueAtTime(0.2, now); gain.gain.linearRampToValueAtTime(0, now+0.8);
+        osc.frequency.setValueAtTime(800, now);
+        osc.frequency.exponentialRampToValueAtTime(100, now + 0.8);
+        osc.start(); osc.stop(now + 0.8);
+    },
+    sfxCrush: function() {
+         this.playNoise(0.3, 0.5);
+         this.playTone(100, 'square', 0.2, true, 0.5);
+    },
+    sfxFail: function() { this.playTone(150, 'sawtooth', 0.4, true, 0.4); },
+    sfxWin: function() {
+        const notes = [523.25, 659.25, 783.99, 1046.50]; // C E G C
+        notes.forEach((note, i) => {
+            setTimeout(() => this.playTone(note, 'triangle', 0.6, true, 0.3), i * 150);
+        });
+    }
+};
+
+// ===========================
+// GAME LOGIC & VISUALS
+// ===========================
+let CONFIG = {
+    totalSquares: 200, cols: 20, rows: 10,
+    players: 4, humanCount: 1,
+    colors: [
+        {main: '#e74c3c', glow: '#c0392b'}, // Red
+        {main: '#3498db', glow: '#2980b9'}, // Blue
+        {main: '#9b59b6', glow: '#8e44ad'}, // Purple
+        {main: '#f1c40f', glow: '#f39c12'}, // Yellow
+        {main: '#2ecc71', glow: '#27ae60'}, // Green
+        {main: '#e67e22', glow: '#d35400'}  // Orange
+    ]
+};
+
+class Game {
+    constructor() {
+        this.canvas = document.getElementById('gameCanvas');
+        this.ctx = this.canvas.getContext('2d');
+        // Enable high DPI rendering
+        const dpr = window.devicePixelRatio || 1;
+        this.canvas.width = 800 * dpr;
+        this.canvas.height = 600 * dpr;
+        this.ctx.scale(dpr, dpr);
+        this.canvas.style.width = '800px';
+        this.canvas.style.height = '600px';
+
+        this.tileWidth = 800 / CONFIG.cols;
+        this.tileHeight = 600 / CONFIG.rows;
+        
+        this.players = [];
+        this.snakes = {};
+        this.powerups = [];
+        this.turnIndex = 0;
+        this.isAnimating = false;
+        this.frameCount = 0; // For pulsing animations
+        
+        this.init();
+        this.gameLoop(); // Start rendering loop
+    }
+
+    init() {
+        // 1. Init Players based on Setup configs
+        for(let i=0; i<CONFIG.players; i++) {
+            let isBot = i >= CONFIG.humanCount;
+            this.players.push({
+                id: i, name: isBot ? `CPU ${i+1}` : `Player ${i+1}`,
+                isCPU: isBot, pos: 0,
+                colorPalette: CONFIG.colors[i],
+                debuff: 0, powerup: false
+            });
+        }
+
+        // 2. Generate Snakes 
+        const snakeDefs = [{h:198,t:48}, {h:180,t:90}, {h:150,t:20}, {h:120,t:60}, {h:99,t:10}, {h:190,t:100}, {h:75,t:30}, {h:55,t:5}, {h:160,t:140}, {h:110,t:80}];
+        snakeDefs.forEach(s => this.snakes[s.h] = s.t);
+
+        // 3. Generate Powerups
+        for(let i=0; i<7; i++) {
+            let pos;
+            do { pos = Math.floor(Math.random() * 190) + 5; } 
+            while (this.snakes[pos] || pos === 0 || this.powerups.includes(pos));
+            this.powerups.push(pos);
+        }
+
+        this.log("Welcome to Serpent's Ascent!", "log-highlight");
+        this.checkTurn();
+    }
+
+    getCoord(index) {
+        const rowFromBottom = Math.floor(index / CONFIG.cols);
+        const col = index % CONFIG.cols;
+        let x = (rowFromBottom % 2 === 0) ? col * this.tileWidth : (CONFIG.cols - 1 - col) * this.tileWidth;
+        let y = 600 - ((rowFromBottom + 1) * this.tileHeight);
+        return {x, y};
+    }
+
+    // --- THE RENDER LOOP ---
+    gameLoop() {
+        this.frameCount++;
+        this.draw();
+        requestAnimationFrame(() => this.gameLoop());
+    }
+
+    draw() {
+        this.ctx.clearRect(0, 0, 800, 600);
+        
+        // 1. Draw Tiles (Enhanced)
+        for(let i=0; i<CONFIG.totalSquares; i++) {
+            const pos = this.getCoord(i);
+            
+            // Gradient Base
+            let bg Grad = this.ctx.createLinearGradient(pos.x, pos.y, pos.x, pos.y + this.tileHeight);
+            if (i === 199) { // Win tile pulsing
+                const pulse = Math.sin(this.frameCount * 0.1) * 20 + 20;
+                bgGrad.addColorStop(0, `rgb(241, 196, 15, ${pulse/100 + 0.5})`);
+                bgGrad.addColorStop(1, '#d35400');
+            } else if (i % 2 === 0) {
+                bgGrad.addColorStop(0, '#ecf0f1'); bgGrad.addColorStop(1, '#bdc3c7');
+            } else {
+                bgGrad.addColorStop(0, '#bdc3c7'); bgGrad.addColorStop(1, '#95a5a6');
+            }
+            
+            this.ctx.fillStyle = bgGrad;
+            // Bevel effect
+            this.ctx.shadowColor = 'rgba(0,0,0,0.2)';
+            this.ctx.shadowBlur = 4;
+            this.ctx.shadowOffsetX = 2;
+            this.ctx.shadowOffsetY = 2;
+            this.ctx.fillRect(pos.x+1, pos.y+1, this.tileWidth-2, this.tileHeight-2);
+            this.ctx.shadowColor = 'transparent'; // Reset shadow
+
+            // Tile Icons
+            this.ctx.textAlign = "center";
+            this.ctx.textBaseline = "middle";
+            const midX = pos.x + this.tileWidth/2;
+            const midY = pos.y + this.tileHeight/2;
+
+            if (this.powerups.includes(i)) {
+                this.ctx.font = "20px Arial"; this.ctx.fillText("⚡", midX, midY);
+            }
+            if (i === 199) {
+                 this.ctx.font = "24px Arial"; this.ctx.fillText("👑", midX, midY);
+            }
+            
+            // Numbers
+            this.ctx.font = "10px Arial";
+            this.ctx.fillStyle = 'rgba(0,0,0,0.4)';
+            this.ctx.fillText(i, pos.x + 10, pos.y + 10);
+        }
+
+        // 2. Draw Snakes (Curved Bezier)
+        Object.keys(this.snakes).forEach(headIdx => {
+            headIdx = parseInt(headIdx);
+            const tailIdx = this.snakes[headIdx];
+            const headPos = this.getCoord(headIdx);
+            const tailPos = this.getCoord(tailIdx);
+            
+            const hX = headPos.x + this.tileWidth/2; const hY = headPos.y + this.tileHeight/2;
+            const tX = tailPos.x + this.tileWidth/2; const tY = tailPos.y + this.tileHeight/2;
+
+            this.ctx.beginPath();
+            this.ctx.moveTo(hX, hY);
+            // Bezier control points for curve
+            let cp1x = hX + (tX - hX) * 0.2; let cp1y = hY;
+            let cp2x = tX - (tX - hX) * 0.2; let cp2y = tY;
+            // Flip curves based on direction to look more natural
+            if (hX > tX) { cp1x += 50; cp2x -= 50; } else { cp1x -= 50; cp2x += 50; }
+
+            this.ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, tX, tY);
+            
+            // Snake styling
+            this.ctx.strokeStyle = '#c0392b';
+            this.ctx.lineWidth = 8;
+            this.ctx.lineCap = 'round';
+            this.ctx.stroke();
+            // Inner pattern line
+            this.ctx.strokeStyle = '#e74c3c';
+            this.ctx.lineWidth = 4;
+            this.ctx.setLineDash([5, 5]);
+            this.ctx.stroke();
+            this.ctx.setLineDash([]); // Reset
+
+            // Head Icon
+            this.ctx.font = "16px Arial"; this.ctx.fillText("🐍", hX, hY-5);
+        });
+
+        // 3. Draw Players (Glowing Orbs)
+        this.players.forEach((p, idx) => {
+            const pos = this.getCoord(p.pos);
+            // Stagger positions
+            const offsetX = (idx % 3) * 10 + 10;
+            const offsetY = Math.floor(idx / 3) * 10 + 20;
+            const pX = pos.x + offsetX; const pY = pos.y + offsetY;
+
+            // Glow effect
+            this.ctx.shadowColor = p.colorPalette.glow;
+            this.ctx.shadowBlur = 15;
+            
+            // Main body gradient
+            let pGrad = this.ctx.createRadialGradient(pX, pY, 2, pX, pY, 12);
+            pGrad.addColorStop(0, 'white');
+            pGrad.addColorStop(1, p.colorPalette.main);
+            
+            this.ctx.beginPath();
+            this.ctx.arc(pX, pY, 12, 0, 2 * Math.PI);
+            this.ctx.fillStyle = pGrad;
+            this.ctx.fill();
+            this.ctx.shadowBlur = 0; // Reset glow
+
+            // Border
+            this.ctx.strokeStyle = 'white'; this.ctx.lineWidth = 2; this.ctx.stroke();
+
+            // Status Icons
+            if(p.debuff < 0) this.ctx.fillText("😓", pX, pY - 15);
+            if(p.isCPU) {
+                 this.ctx.font = "10px Arial"; this.ctx.fillText("🤖", pX, pY + 5);
+            }
+        });
+    }
+
+    // --- GAMEPLAY LOGIC ---
+    humanRoll() {
+        const player = this.players[this.turnIndex];
+        if (!player.isCPU && !this.isAnimating) this.executeTurn(player);
+    }
+
+    checkTurn() {
+        const player = this.players[this.turnIndex];
+        const btn = document.getElementById('rollBtn');
+        const statusTitle = document.getElementById('currentPlayerText');
+        const statusType = document.getElementById('statusType');
+        const statusIcon = document.getElementById('statusIcon');
+        
+        statusTitle.innerText = player.name;
+        statusTitle.style.color = player.colorPalette.main;
+        document.getElementById('diceResult').innerText = "READY";
+
+        if (player.debuff < 0) {
+             statusType.innerText = "Status: DAZED (-2 Roll)"; statusIcon.innerText = "😓"; statusType.style.color = '#e74c3c';
+        } else if (player.powerup) {
+             statusType.innerText = "Status: POWERED UP (x2 Dice)"; statusIcon.innerText = "⚡"; statusType.style.color = '#f1c40f';
+        } else {
+             statusType.innerText = "Status: Normal"; statusIcon.innerText = "😊"; statusType.style.color = 'white';
+        }
+
+        if (player.isCPU) {
+            btn.disabled = true; btn.innerText = "CPU THINKING...";
+            setTimeout(() => this.executeTurn(player), 1000 + Math.random()*500);
+        } else {
+            btn.disabled = false; btn.innerText = "ROLL DICE 🎲";
+        }
+    }
+
+    async executeTurn(player) {
+        this.isAnimating = true;
+        document.getElementById('rollBtn').disabled = true;
+        
+        AudioEngine.sfxDice(); // SFX
+        let diceCount = player.powerup ? 2 : 1;
+        if(player.powerup) { player.powerup = false; this.log("Uses Powerup!", "log-highlight"); }
+
+        let rollTotal = 0; let rollStr = "";
+        for(let i=0; i<diceCount; i++) {
+            let r = Math.floor(Math.random() * 6) + 1; rollTotal += r;
+            rollStr += (i>0?" + ":"") + r;
+        }
+        
+        let finalMove = rollTotal;
+        if (player.debuff < 0) {
+            finalMove = Math.max(0, rollTotal + player.debuff);
+            this.log(`Dazed! Rolled ${rollTotal} but moves ${finalMove}.`, "log-danger");
+            player.debuff = 0;
+        } else {
+             if(diceCount>1) this.log(`Rolled: ${rollStr} = ${rollTotal}`);
+        }
+
+        document.getElementById('diceResult').innerText = finalMove;
+        await new Promise(r => setTimeout(r, 400)); // Pause to see dice
+
+        if (finalMove > 0) await this.animateMove(player, finalMove);
+        
+        await this.checkTileEvents(player);
+
+        if (player.pos === 199) {
+             AudioEngine.sfxWin(); // SFX
+             this.log(`🏆 ${player.name} WINS! 🏆`, "log-success");
+             document.getElementById('rollBtn').innerText = "GAME OVER";
+             statusTitle.innerText = player.name + " WINS!";
+        } else {
+            this.turnIndex = (this.turnIndex + 1) % CONFIG.players;
+            this.isAnimating = false;
+            this.checkTurn();
+        }
+    }
+
+    async animateMove(player, steps) {
+        for(let i=0; i<steps; i++) {
+            // Overshoot Check
+            if (player.pos + (steps - i) > 199) {
+                this.log("Overshot! Needs exact roll.", "log-danger");
+                AudioEngine.sfxFail(); // SFX
+                // Screen shake
+                this.ctx.save(); this.ctx.translate(Math.random()*10-5, Math.random()*10-5);
+                await new Promise(r => setTimeout(r, 200));
+                this.ctx.restore();
+                return;
+            }
+            player.pos++;
+            AudioEngine.sfxStep(); // SFX
+            await new Promise(r => setTimeout(r, player.isCPU ? 100 : 180)); 
+        }
+    }
+
+    async checkTileEvents(player) {
+        // Snake
+        if (this.snakes[player.pos]) {
+            this.log("Oh no! A snake!", "log-danger");
+            AudioEngine.sfxSnake(); // SFX
+            await new Promise(r => setTimeout(r, 500));
+            player.pos = this.snakes[player.pos];
+        }
+        // Powerup
+        if (this.powerups.includes(player.pos)) {
+            AudioEngine.sfxPowerup(); // SFX
+            this.log("Found a Powerup! Next roll x2.", "log-success");
+            player.powerup = true;
+        }
+        // Collision (Crush)
+        if (player.pos !== 0) {
+            this.players.forEach(other => {
+                if (other.id !== player.id && other.pos === player.pos) {
+                    AudioEngine.sfxCrush(); // SFX
+                    this.log(`💥 CRUSHED ${other.name}!`, "log-highlight");
+                    other.debuff = -2;
+                    // Visual Flash
+                    this.ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+                    this.ctx.fillRect(0,0,800,600);
+                }
+            });
+        }
+    }
+
+    log(msg, type="") {
+        const box = document.getElementById('gameLog');
+        box.innerHTML = `<div class="log-entry ${type}">${this.players[this.turnIndex].name}: ${msg}</div>` + box.innerHTML;
+    }
+}
+
+// ===========================
+// SETUP & INITIALIZATION
+// ===========================
+const startBtn = document.getElementById('startBtn');
+const setupOverlay = document.getElementById('setupOverlay');
+const mainContainer = document.getElementById('mainContainer');
+let gameInstance;
+
+startBtn.addEventListener('click', () => {
+    // Initialize Audio first thing on user click
+    AudioEngine.init();
+
+    // Read configs
+    const totalP = parseInt(document.getElementById('totalPlayers').value);
+    const aiP = parseInt(document.getElementById('aiPlayers').value);
+
+    if(aiP >= totalP) {
+        alert("Error: Cannot have all players be AI. At least one human needed.");
+        return;
+    }
+
+    CONFIG.players = totalP;
+    CONFIG.humanCount = totalP - aiP;
+
+    // Hide setup, show game
+    setupOverlay.style.display = 'none';
+    mainContainer.classList.add('active');
+
+    // Start Game
+    gameInstance = new Game();
+    document.getElementById('rollBtn').addEventListener('click', () => gameInstance.humanRoll());
+});
+
+// Pre-validation for setup UI
+document.getElementById('totalPlayers').addEventListener('change', (e) => {
+    const total = parseInt(e.target.value);
+    const aiSelect = document.getElementById('aiPlayers');
+    // Ensure AI count doesn't exceed Total-1
+    Array.from(aiSelect.options).forEach(opt => {
+        opt.disabled = parseInt(opt.value) >= total;
+    });
+    if(parseInt(aiSelect.value) >= total) {
+        aiSelect.value = total - 1;
+    }
+});
+
+</script>
+</body>
+</html>
