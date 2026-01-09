@@ -540,7 +540,7 @@ class Game {
              AudioEngine.sfxWin(); // SFX
              this.log(`🏆 ${player.name} WINS! 🏆`, "log-success");
              document.getElementById('rollBtn').innerText = "GAME OVER";
-             statusTitle.innerText = player.name + " WINS!";
+             document.getElementById('currentPlayerText').innerText = player.name + " WINS!";
         } else {
             this.turnIndex = (this.turnIndex + 1) % CONFIG.players;
             this.isAnimating = false;
