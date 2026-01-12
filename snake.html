@@ -158,6 +158,23 @@
                 </select>
             </div>
             <button class="btn-action" id="startBtn">Start Game 🎲</button>
+
+            <div style="margin-top: 20px; border-top: 1px solid #546e7a; padding-top: 20px;">
+                <h3 style="color: var(--accent); margin: 0 0 10px 0;">Online Multiplayer</h3>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn-action" id="hostBtn" style="background: #27ae60; font-size: 1rem; padding: 12px;">Host Game</button>
+                    <button class="btn-action" id="joinBtn" style="background: #2980b9; font-size: 1rem; padding: 12px;">Join Game</button>
+                </div>
+                <div id="joinArea" style="display: none; margin-top: 10px;">
+                    <input type="text" id="roomInput" placeholder="Enter Room Code" style="padding: 10px; width: 60%; border-radius: 4px; border: none;">
+                    <button class="btn-action" id="connectBtn" style="background: #2980b9; font-size: 0.9rem; padding: 10px; width: 30%;">Connect</button>
+                </div>
+                <div id="lobbyArea" style="display: none; margin-top: 10px; color: #ecf0f1;">
+                    <p>Room Code: <span id="roomCodeDisplay" style="color: var(--accent); font-weight: bold; font-size: 1.5rem;"></span></p>
+                    <p id="lobbyStatus">Waiting for players...</p>
+                    <button class="btn-action" id="multiStartBtn" style="background: #f39c12; margin-top: 10px;">Start Multiplayer</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -309,8 +326,36 @@ class Game {
         this.isAnimating = false;
         this.frameCount = 0; // For pulsing animations
         
+        // Multiplayer flags
+        this.isMultiplayer = false;
+        this.isHost = false;
+        this.roomId = null;
+        this.myPlayerId = 0;
+
         this.init();
         this.gameLoop(); // Start rendering loop
+    }
+
+    initMultiplayer(isHost, roomId, playerId) {
+        this.isMultiplayer = true;
+        this.isHost = isHost;
+        this.roomId = roomId;
+        this.myPlayerId = playerId;
+
+        // Refresh UI state now that we know we are multiplayer
+        this.checkTurn();
+
+        if (isHost) {
+            // Host broadcasts start game to sync powerups
+            // A small delay to ensure everyone is listening
+            setTimeout(() => {
+                netManager.sendSignal('START_GAME', {
+                    players: CONFIG.players,
+                    humanCount: CONFIG.humanCount,
+                    powerups: this.powerups
+                });
+            }, 500);
+        }
     }
 
     init() {
@@ -474,9 +519,87 @@ class Game {
     }
 
     // --- GAMEPLAY LOGIC ---
-    humanRoll() {
+    async humanRoll() {
         const player = this.players[this.turnIndex];
-        if (!player.isCPU && !this.isAnimating) this.executeTurn(player);
+        if (!player.isCPU && !this.isAnimating) {
+            if (this.isMultiplayer) {
+                // If it is my turn, I can roll
+                if (this.turnIndex === this.myPlayerId) {
+                    if (this.isHost) {
+                         // Host Logic: Calculate and Broadcast
+                         this.executeTurn(player, true);
+                    } else {
+                         // Client Logic: Request Host to Roll
+                         netManager.sendSignal('REQUEST_ROLL', { playerId: this.myPlayerId });
+                         document.getElementById('rollBtn').disabled = true;
+                         document.getElementById('rollBtn').innerText = "WAITING...";
+                    }
+                }
+            } else {
+                this.executeTurn(player);
+            }
+        }
+    }
+
+    // Only Host calls this when receiving REQUEST_ROLL
+    // Or Client calls this when receiving TURN_UPDATE
+    async handleRemoteTurn(data) {
+        if (this.isMultiplayer) {
+             // If I am the one who triggered this turn (e.g. Host processing local turn),
+             // I might have already started animation? No, let's keep it sync.
+
+             // Host Logic: I already calculated everything and sent it.
+             // Wait, if Host calls executeTurn(broadcast=true), it broadcasts THEN animates.
+             // If Peer receives TURN_UPDATE, they just animate.
+
+             if (this.isHost) return; // Host ignores its own broadcasts usually, or we can unify.
+
+             // Peer Logic: Apply the data
+             const player = this.players[data.playerId];
+             this.turnIndex = data.playerId; // Sync turn just in case
+
+             this.isAnimating = true;
+             document.getElementById('rollBtn').disabled = true;
+
+             // 1. Show Dice Result
+             AudioEngine.sfxDice();
+             document.getElementById('diceResult').innerText = data.finalMove;
+
+             if (data.wasPowerup) {
+                 player.powerup = false;
+                 this.log("Uses Powerup!", "log-highlight");
+             }
+             if (data.wasDazed) {
+                 this.log(`Dazed! Rolled ${data.rawRoll} but moves ${data.finalMove}.`, "log-danger");
+                 player.debuff = 0;
+             } else {
+                 // Basic log
+                 this.log(`Rolled: ${data.finalMove}`);
+             }
+
+             await new Promise(r => setTimeout(r, 400));
+
+             // 2. Animate Move
+             if (data.finalMove > 0) await this.animateMove(player, data.finalMove);
+
+             // 3. Tile Events (Simulated visually, state is authoritative from server?)
+             // Actually, Host just sent the result. Peer should update local state to match.
+             // "checkTileEvents" updates position. We should rely on Host's data for final position?
+             // But for visual effects (snake sound, etc) we want to run the checker.
+             await this.checkTileEvents(player);
+
+             // 4. Check Win
+             if (player.pos === 199) {
+                 AudioEngine.sfxWin();
+                 this.log(`🏆 ${player.name} WINS! 🏆`, "log-success");
+                 document.getElementById('rollBtn').innerText = "GAME OVER";
+                 document.getElementById('currentPlayerText').innerText = player.name + " WINS!";
+             } else {
+                 this.turnIndex = (this.turnIndex + 1) % CONFIG.players;
+                 this.isAnimating = false;
+                 this.checkTurn();
+             }
+        }
     }
 
     checkTurn() {
@@ -490,6 +613,16 @@ class Game {
         statusTitle.style.color = player.colorPalette.main;
         document.getElementById('diceResult').innerText = "READY";
 
+        // Logic to disable controls if Multiplayer and not my turn
+        let isMyTurn = true;
+        if (this.isMultiplayer) {
+            isMyTurn = (this.turnIndex === this.myPlayerId);
+            // If I am Host, I also handle CPU turns?
+            // If it is CPU turn, Host should execute it automatically.
+            // Peer should just wait.
+            if (player.isCPU && !this.isHost) isMyTurn = false;
+        }
+
         if (player.debuff < 0) {
              statusType.innerText = "Status: DAZED (-2 Roll)"; statusIcon.innerText = "😓"; statusType.style.color = '#e74c3c';
         } else if (player.powerup) {
@@ -500,18 +633,28 @@ class Game {
 
         if (player.isCPU) {
             btn.disabled = true; btn.innerText = "CPU THINKING...";
-            setTimeout(() => this.executeTurn(player), 1000 + Math.random()*500);
+            // Only Host runs CPU logic
+            if (!this.isMultiplayer || (this.isMultiplayer && this.isHost)) {
+                setTimeout(() => this.executeTurn(player, this.isMultiplayer), 1000 + Math.random()*500);
+            }
         } else {
-            btn.disabled = false; btn.innerText = "ROLL DICE 🎲";
+            if (isMyTurn) {
+                btn.disabled = false; btn.innerText = "ROLL DICE 🎲";
+            } else {
+                btn.disabled = true; btn.innerText = `WAITING FOR ${player.name}...`;
+            }
         }
     }
 
-    async executeTurn(player) {
+    // Added broadcast param
+    async executeTurn(player, broadcast = false) {
+        // If Host in MP receiving a Request, or Host running CPU turn
         this.isAnimating = true;
         document.getElementById('rollBtn').disabled = true;
         
         AudioEngine.sfxDice(); // SFX
         let diceCount = player.powerup ? 2 : 1;
+        let wasPowerup = player.powerup; // Capture state before reset
         if(player.powerup) { player.powerup = false; this.log("Uses Powerup!", "log-highlight"); }
 
         let rollTotal = 0; let rollStr = "";
@@ -521,12 +664,25 @@ class Game {
         }
         
         let finalMove = rollTotal;
+        let wasDazed = false;
         if (player.debuff < 0) {
+            wasDazed = true;
             finalMove = Math.max(0, rollTotal + player.debuff);
             this.log(`Dazed! Rolled ${rollTotal} but moves ${finalMove}.`, "log-danger");
             player.debuff = 0;
         } else {
              if(diceCount>1) this.log(`Rolled: ${rollStr} = ${rollTotal}`);
+        }
+
+        // Broadcast immediately if Host
+        if (broadcast && this.isHost) {
+             netManager.sendSignal('TURN_UPDATE', {
+                 playerId: player.id,
+                 rawRoll: rollTotal,
+                 finalMove: finalMove,
+                 wasPowerup: wasPowerup,
+                 wasDazed: wasDazed
+             });
         }
 
         document.getElementById('diceResult').innerText = finalMove;
@@ -634,6 +790,85 @@ startBtn.addEventListener('click', () => {
     document.getElementById('rollBtn').addEventListener('click', () => gameInstance.humanRoll());
 });
 
+// Multiplayer UI Handlers
+const hostBtn = document.getElementById('hostBtn');
+const joinBtn = document.getElementById('joinBtn');
+const joinArea = document.getElementById('joinArea');
+const connectBtn = document.getElementById('connectBtn');
+const lobbyArea = document.getElementById('lobbyArea');
+const roomCodeDisplay = document.getElementById('roomCodeDisplay');
+const multiStartBtn = document.getElementById('multiStartBtn');
+
+hostBtn.addEventListener('click', async () => {
+    AudioEngine.init();
+    hostBtn.disabled = true;
+    const roomId = await netManager.createRoom();
+    if(roomId) {
+        joinBtn.style.display = 'none';
+        hostBtn.style.display = 'none';
+        lobbyArea.style.display = 'block';
+        roomCodeDisplay.innerText = roomId;
+    }
+});
+
+joinBtn.addEventListener('click', () => {
+    AudioEngine.init();
+    joinArea.style.display = 'block';
+    hostBtn.style.display = 'none';
+    joinBtn.style.display = 'none';
+});
+
+connectBtn.addEventListener('click', async () => {
+    const roomId = document.getElementById('roomInput').value.trim().toUpperCase();
+    if(!roomId) return;
+
+    connectBtn.disabled = true;
+    const success = await netManager.joinRoom(roomId);
+    if(success) {
+        joinArea.style.display = 'none';
+        lobbyArea.style.display = 'block';
+        roomCodeDisplay.innerText = roomId;
+        multiStartBtn.style.display = 'none'; // Only host can start
+        document.getElementById('lobbyStatus').innerText = "Connected! Waiting for Host...";
+    } else {
+        connectBtn.disabled = false;
+    }
+});
+
+multiStartBtn.addEventListener('click', () => {
+    // Read configs for Multiplayer (Host decides)
+    const totalP = parseInt(document.getElementById('totalPlayers').value);
+    const aiP = parseInt(document.getElementById('aiPlayers').value);
+
+    CONFIG.players = totalP;
+    // Ensure humanCount matches at least 2 in multiplayer if defaults are used
+    // Ideally, we should track connected players.
+    // For now, if AI settings would make P2 a Bot, we override it if we are in multiplayer
+    // Assuming at least 2 humans in multiplayer.
+    let calculatedHumans = totalP - aiP;
+    if (calculatedHumans < 2) calculatedHumans = 2; // Force at least 2 humans for MP
+
+    CONFIG.humanCount = calculatedHumans;
+
+    setupOverlay.style.display = 'none';
+    mainContainer.classList.add('active');
+
+    gameInstance = new Game();
+    gameInstance.initMultiplayer(true, netManager.roomId, 0);
+    document.getElementById('rollBtn').addEventListener('click', () => gameInstance.humanRoll());
+
+    // Listen for peer requests
+    netManager.eventSource.addEventListener('message', (e) => {
+         const msg = JSON.parse(e.data);
+         if (msg.event === 'REQUEST_ROLL' && gameInstance.isHost) {
+             const player = gameInstance.players[msg.data.playerId];
+             if (gameInstance.turnIndex === msg.data.playerId) {
+                 gameInstance.executeTurn(player, true);
+             }
+         }
+    });
+});
+
 // Pre-validation for setup UI
 document.getElementById('totalPlayers').addEventListener('change', (e) => {
     const total = parseInt(e.target.value);
@@ -646,6 +881,130 @@ document.getElementById('totalPlayers').addEventListener('change', (e) => {
         aiSelect.value = total - 1;
     }
 });
+
+// ===========================
+// NETWORKING
+// ===========================
+class NetworkManager {
+    constructor() {
+        this.roomId = null;
+        this.playerId = null;
+        this.isHost = false;
+        this.eventSource = null;
+        // Point to local server. In a real deployment, this should be the server's address.
+        this.serverUrl = 'http://localhost:3000';
+    }
+
+    async createRoom() {
+        try {
+            const res = await fetch(`${this.serverUrl}/api/create`, { method: 'POST' });
+            const data = await res.json();
+            this.roomId = data.roomId;
+            this.isHost = true;
+            this.playerId = 0; // Host is always 0
+            this.connectSSE();
+            return this.roomId;
+        } catch (e) {
+            console.error("Create Room Error:", e);
+            alert("Failed to connect to server.");
+        }
+    }
+
+    async joinRoom(roomId) {
+        try {
+            const res = await fetch(`${this.serverUrl}/api/join`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ roomId })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.roomId = roomId;
+                this.isHost = false;
+                this.playerId = data.playerId;
+                this.connectSSE();
+                return true;
+            } else {
+                alert(data.error || "Failed to join.");
+                return false;
+            }
+        } catch (e) {
+            console.error("Join Room Error:", e);
+            alert("Failed to connect to server.");
+            return false;
+        }
+    }
+
+    connectSSE() {
+        if (this.eventSource) this.eventSource.close();
+        this.eventSource = new EventSource(`${this.serverUrl}/events?roomId=${this.roomId}`);
+
+        this.eventSource.onerror = (e) => console.error("SSE Error", e);
+
+        this.eventSource.onmessage = (e) => {
+            const msg = JSON.parse(e.data);
+            this.handleEvent(msg);
+        };
+    }
+
+    handleEvent(msg) {
+        // If we receive START_GAME, we might not have gameInstance yet if we are Peer in Lobby
+        if (msg.event === 'START_GAME' && !gameInstance && !this.isHost) {
+             CONFIG.players = msg.data.players;
+             CONFIG.humanCount = msg.data.humanCount;
+             setupOverlay.style.display = 'none';
+             mainContainer.classList.add('active');
+             gameInstance = new Game();
+             gameInstance.initMultiplayer(false, this.roomId, this.playerId);
+             gameInstance.powerups = msg.data.powerups;
+             gameInstance.log("Connected to Host!", "log-success");
+             return;
+        }
+
+        if (!gameInstance) return;
+
+        switch(msg.event) {
+            case 'START_GAME':
+                if (!this.isHost) {
+                    // Initialize peer game with host's config
+                    // TODO: Need to pass random seeds/powerups to ensure sync
+                    // For now, we trust the host sends necessary state in updates or we sync init
+                    // The simplest sync is sending the powerup locations.
+                    CONFIG.players = msg.data.players;
+                    CONFIG.humanCount = msg.data.humanCount;
+                    setupOverlay.style.display = 'none';
+                    mainContainer.classList.add('active');
+                    gameInstance = new Game();
+                    gameInstance.initMultiplayer(false, this.roomId, this.playerId);
+                    gameInstance.powerups = msg.data.powerups; // Sync powerups
+                    gameInstance.log("Connected to Host!", "log-success");
+                }
+                break;
+            case 'TURN_UPDATE':
+                gameInstance.handleRemoteTurn(msg.data);
+                break;
+            case 'PLAYER_JOINED':
+                if (this.isHost && gameInstance) {
+                     gameInstance.log("A player joined!", "log-highlight");
+                } else if (!gameInstance) {
+                     // Lobby update logic could go here
+                     const status = document.getElementById('lobbyStatus');
+                     if(status) status.innerText = `Player joined! Ready to start?`;
+                }
+                break;
+        }
+    }
+
+    async sendSignal(event, data) {
+        await fetch(`${this.serverUrl}/api/signal`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ roomId: this.roomId, event, data })
+        });
+    }
+}
+
+const netManager = new NetworkManager();
 
 </script>
 </body>
